@@ -23,13 +23,25 @@ class ZmpQpController:
         self.alpha = self.zc / self.g
         self.D = - self.alpha * np.eye(2)
 
-        # fixed sparsity (4 polygon constraints + 2 bounds on each input) 
-        self.m = 4 + 2 
+        # fixed sparsity (8 polygon constraints + 2 bounds on each input) 
+        self.m = 8 + 2 
         self.n = 2
 
+        # OSQP requires that matrix updates keep the same sparsity pattern.
+        # Pre-allocate *fixed* patterns for P (upper triangular) and A.
+        # We intentionally store zero-valued entries so that the number of
+        # non-zeros (nnz) stays constant across updates.
+        self._P_pattern = sp.csc_matrix(np.triu(np.ones((self.n, self.n), dtype=float)))
+        self._A_pattern = sp.csc_matrix(np.ones((self.m, self.n), dtype=float))
+
         # setup OSQP problem
-        P0 = sp.csc_matrix(np.eye(2))
-        A0 = sp.csc_matrix(np.zeros((self.m, 2)))
+        # P is provided as upper triangular; keep pattern fixed.
+        P0 = self._P_pattern.copy()
+        P0.data[:] = np.array([1.0, 0.0, 1.0], dtype=float)
+
+        # A pattern is fully dense (m x n) with stored zeros.
+        A0 = self._A_pattern.copy()
+        A0.data[:] = 0.0
         q0 = np.zeros(2)
         l0 = -np.inf * np.ones(self.m)
         u0 = np.inf * np.ones(self.m)
@@ -43,7 +55,10 @@ class ZmpQpController:
                 u_des: np.ndarray,
                 p_ref: np.ndarray,
                 H: np.ndarray,
-                h: np.ndarray) -> np.ndarray:
+                h: np.ndarray,
+                W: np.ndarray | None = None,
+                Wp: np.ndarray | None = None,
+                Wdu: np.ndarray | None = None) -> np.ndarray:
         """
         Solve QP over u in R^2
 
@@ -61,12 +76,16 @@ class ZmpQpController:
         u_des = u_des.reshape(2,)
         p_ref = p_ref.reshape(2,)
 
+        W = self.W if W is None else W
+        Wp = self.Wp if Wp is None else Wp
+        Wdu = self.Wdu if Wdu is None else Wdu
+
         # P = W + D.T @ Wp @ D + Wdu
-        P = self.W + self.D.T @ self.Wp @ self.D + self.Wdu
+        P = W + self.D.T @ Wp @ self.D + Wdu
         P = 0.5 * (P + P.T)  # ensure symmetry
 
         # q = - W @ u_des - D.T @ Wp @ (p_ref - r) - Wdu @ u_prev
-        q = - self.W @ u_des - self.D.T @ self.Wp @ (p_ref - r) - self.Wdu @ u_prev
+        q = - W @ u_des - self.D.T @ Wp @ (p_ref - r) - Wdu @ u_prev
 
         # Constraints: A u in [l,u]
         # (H D) u <= h - H r
@@ -84,11 +103,19 @@ class ZmpQpController:
         u = np.hstack((u1, u2))
 
         # update OSQP problem
-        self.prob.update(Px=sp.csc_matrix(P).data, q=q, Ax=sp.csc_matrix(A).data, l=l, u=u)
+        # Keep the same sparsity pattern as in setup.
+        # P (upper triangular) data order for 2x2 CSC of triu(ones):
+        #   [(0,0), (0,1), (1,1)]
+        Px = np.array([P[0, 0], P[0, 1], P[1, 1]], dtype=float)
 
+        # A data order for CSC of ones(m,n) is column-major:
+        #   col0 rows 0..m-1, then col1 rows 0..m-1
+        Ax = np.hstack((A[:, 0], A[:, 1])).astype(float, copy=False)
+
+        self.prob.update(Px=Px, q=q, Ax=Ax, l=l, u=u)
         res = self.prob.solve()
 
         ok = (res.info.status_val in (1,2))  # solved or solved inaccurate
         if not ok:
-            return u_prev.copy(), False, res.info.status
+            return np.zeros(2), False, res.info.status
         return np.array(res.x), True, res.info.status
