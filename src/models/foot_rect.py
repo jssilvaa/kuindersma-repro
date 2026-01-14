@@ -3,7 +3,7 @@ import numpy as np
 def rectangle_Hh(cx: float, cy: float, hx: float, hy:float):
     """
     Axis-aligned rectangle centered at (cx, cy) with half-lengths hx and hy.
-    Returns h, h s.t. h.T @ [x, y] <= h
+    Returns H, h s.t. H.T @ [x, y] <= h
     """
     H = np.array([[1, 0],
                   [-1, 0],
