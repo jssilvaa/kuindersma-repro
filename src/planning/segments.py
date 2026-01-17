@@ -29,19 +29,23 @@ def build_segments(n_steps: int, ds: float, ss: float, step_length: float, step_
     stance = "L"
     for _ in range(n_steps):
         if stance == "L":
-            # SS left
-            segs.append(Segment(t, t+ss, "SSL", L.copy(), R.copy(), L.copy(), L.copy()))
+            # SS left (preview the next right-foot placement in R so controllers can
+            # build forward-looking references without affecting SS support constraints)
+            R_next = R + np.array([step_length, 0.0], dtype=float)
+            segs.append(Segment(t, t+ss, "SSL", L.copy(), R_next.copy(), L.copy(), L.copy()))
             t += ss
             # place right forward
-            R = R + np.array([step_length, 0.0], dtype=float)
+            R = R_next
             # DS: L -> new R
             segs.append(Segment(t, t+ds, "DS", L.copy(), R.copy(), L.copy(), R.copy()))
             t += ds
             stance = "R"
         else:
-            segs.append(Segment(t, t+ss, "SSR", L.copy(), R.copy(), R.copy(), R.copy()))
+            # SS right (preview the next left-foot placement in L)
+            L_next = L + np.array([step_length, 0.0], dtype=float)
+            segs.append(Segment(t, t+ss, "SSR", L_next.copy(), R.copy(), R.copy(), R.copy()))
             t += ss
-            L = L + np.array([step_length, 0.0], dtype=float)
+            L = L_next
             segs.append(Segment(t, t+ds, "DS", L.copy(), R.copy(), R.copy(), L.copy()))
             t += ds
             stance = "L"
